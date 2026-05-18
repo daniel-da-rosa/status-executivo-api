@@ -78,13 +78,26 @@ COLUNAS_RISCOS = {
     'probabilidade':     'probabilidade',
     'impacto':           'impacto',
 }
+# ─────────────────────────────────────────────────────────────────
+# ADICIONAR ao dicionário ABAS_MAPEAMENTO (junto com as outras abas)
+# ─────────────────────────────────────────────────────────────────
+
+COLUNAS_OBJETIVOS = {
+    'objetivo':  'objetivo',
+    'descricao': 'descricao',
+    'status':    'status',
+    'icone':     'icone',
+}
 
 ABAS_MAPEAMENTO = {
     'ATIVIDADE':      ('fases',           COLUNAS_FASES),
     'AREAS':          ('areas',           COLUNAS_AREAS),
     'PONTOS_ATENCAO': ('pontos_atencao',  COLUNAS_PONTOS_ATENCAO),
     'RISCOS':         ('riscos',          COLUNAS_RISCOS),
+    'OBJETIVOS':      ('objetivos',       COLUNAS_OBJETIVOS),   
 }
+
+ ─────────────────────────────────────────────────────────────────
 
 # ── Helpers ───────────────────────────────────────────────────────
 def limpar_nome_coluna(nome) -> str | None:
