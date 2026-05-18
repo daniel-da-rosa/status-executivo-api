@@ -219,3 +219,6 @@ async def importar_dados(
     except Exception as e:
         print(f"❌ Erro interno: {e}")
         raise HTTPException(status_code=500, detail=f"Erro ao processar planilha: {e}")
+
+from mangum import Mangum
+handler = Mangum(app)

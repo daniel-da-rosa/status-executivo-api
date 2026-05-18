@@ -67,7 +67,7 @@ COLUNAS_PONTOS_ATENCAO = {
     'indicado_por_area': 'indicado_por_area',
     'descricao':         'descricao',
     'situacao':          'situacao',
-    'probalidade':       'probabilidade',
+    'probabilidade':     'probabilidade',
     'impacto':           'impacto',
 }
 
@@ -75,7 +75,7 @@ COLUNAS_RISCOS = {
     'indicado_por_area': 'indicado_por_area',
     'detalhes':          'detalhes',
     'fase':              'fase',
-    'probalidade':       'probabilidade',
+    'probabilidade':     'probabilidade',
     'impacto':           'impacto',
 }
 
@@ -87,8 +87,16 @@ ABAS_MAPEAMENTO = {
 }
 
 # ── Helpers ───────────────────────────────────────────────────────
-def limpar_nome_coluna(nome: str) -> str:
+def limpar_nome_coluna(nome) -> str | None:
+    """
+    Normaliza um nome de coluna para snake_case sem acentos.
+    Retorna None se o valor for vazio ou nulo (coluna sem cabeçalho).
+    """
+    if nome is None:
+        return None
     nome = str(nome).strip()
+    if not nome:
+        return None
     nome = unicodedata.normalize('NFD', nome)
     nome = ''.join(c for c in nome if unicodedata.category(c) != 'Mn')
     nome = nome.lower()
@@ -98,7 +106,7 @@ def limpar_nome_coluna(nome: str) -> str:
     nome = nome.strip('_')
     if nome and nome[0].isdigit():
         nome = f'col_{nome}'
-    return nome
+    return nome or None
 
 
 def normalizar_dtypes(df: pd.DataFrame) -> pd.DataFrame:
@@ -110,9 +118,30 @@ def normalizar_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def selecionar_e_renomear(df: pd.DataFrame, mapeamento: dict) -> pd.DataFrame:
+def selecionar_e_renomear(df: pd.DataFrame, mapeamento: dict, sheet: str = '') -> pd.DataFrame:
+    """
+    Seleciona e renomeia colunas conforme o mapeamento.
+    Loga um aviso para colunas esperadas que não foram encontradas.
+    """
     presentes = {k: v for k, v in mapeamento.items() if k in df.columns}
+    faltando = [k for k in mapeamento if k not in df.columns]
+
+    if faltando:
+        print(f"⚠️  [{sheet}] Colunas do mapeamento não encontradas no Excel (serão ignoradas): {faltando}")
+
     return df[list(presentes.keys())].rename(columns=presentes)
+
+
+def remover_colunas_sem_cabecalho(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove colunas cujo nome é None após a limpeza (cabeçalhos vazios/nulos no Excel).
+    Evita que colunas extras vazias do Excel poluam o DataFrame silenciosamente.
+    """
+    colunas_validas = [c for c in df.columns if c is not None]
+    removidas = len(df.columns) - len(colunas_validas)
+    if removidas:
+        print(f"⚠️  {removidas} coluna(s) sem cabeçalho removida(s).")
+    return df[colunas_validas]
 
 
 def ler_aba(file_buffer: io.BytesIO, sheet_name: str, **kwargs):
@@ -151,6 +180,7 @@ async def importar_dados(
 
             df_projeto = df_projeto_raw.set_index(0).T
             df_projeto.columns = [limpar_nome_coluna(c) for c in df_projeto.columns]
+            df_projeto = remover_colunas_sem_cabecalho(df_projeto)
             df_projeto = df_projeto.reset_index(drop=True)
 
             if 'projeto' not in df_projeto.columns:
@@ -173,7 +203,7 @@ async def importar_dados(
                 )
 
             # 3. INSERIR PROJETO
-            df_projeto = selecionar_e_renomear(df_projeto, COLUNAS_PROJETOS)
+            df_projeto = selecionar_e_renomear(df_projeto, COLUNAS_PROJETOS, sheet='PROJETO')
             df_projeto = normalizar_dtypes(df_projeto)
             df_projeto['owner_id'] = owner_id
             df_projeto.to_sql('projetos', conn, if_exists='append', index=False, dtype={'owner_id': UUID})
@@ -182,9 +212,14 @@ async def importar_dados(
             for sheet, (tabela, mapeamento) in ABAS_MAPEAMENTO.items():
                 df_aba = ler_aba(file_buffer, sheet)
                 if df_aba is None:
+                    print(f"⚠️  Aba '{sheet}' não encontrada ou vazia — ignorada.")
                     continue
+
+                # Limpa nomes de colunas e remove as que não têm cabeçalho
                 df_aba.columns = [limpar_nome_coluna(c) for c in df_aba.columns]
-                df_aba = selecionar_e_renomear(df_aba, mapeamento)
+                df_aba = remover_colunas_sem_cabecalho(df_aba)
+
+                df_aba = selecionar_e_renomear(df_aba, mapeamento, sheet=sheet)
                 df_aba = normalizar_dtypes(df_aba)
                 df_aba['projeto_vinculo'] = nome_do_projeto
                 df_aba['owner_id'] = owner_id
