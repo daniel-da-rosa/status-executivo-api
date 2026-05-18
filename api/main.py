@@ -84,6 +84,7 @@ COLUNAS_RISCOS = {
 
 COLUNAS_OBJETIVOS = {
     'objetivo':  'objetivo',
+    'descricao_curta': 'descricao_curta',
     'descricao': 'descricao',
     'status':    'status',
     'icone':     'icone',
