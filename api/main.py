@@ -9,6 +9,9 @@ from sqlalchemy.dialects.postgresql import UUID
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── Conexão ───────────────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL")
