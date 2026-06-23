@@ -24,18 +24,12 @@ def limpar_nome_coluna(nome):
     re_limpo = re.sub(r'[\s\.\-\/]+', '_', nome)
     re_limpo = re.sub(r'[^\w]', '', re_limpo)
     re_limpo = re.sub(r'_+', '_', re_limpo)
+    re_limpo = re.sub(r'_+', '_', re_limpo)
     re_limpo = re_limpo.strip('_')
     if re_limpo and re_limpo[0].isdigit():
         re_limpo = f'col_{re_limpo}'
     return re_limpo
 
-
-COLUNAS_EXCLUIR_PROJETOS = {
-    'col_1_levantamento', 'col_2_cadastros',
-    'col_3_etapa_i',      'col_4_etapa_ii',
-    'col_5_etapa_iii',    'col_6_etapa_iv',
-    'encerramento',       'nao_planejado',
-}
 
 def importar_dados():
     arquivo = 'escopo.xlsx'
@@ -45,9 +39,10 @@ def importar_dados():
         return
 
     try:
-        # ── 1. DESCOBRIR NOME DO PROJETO (ABA PROJETO) ────────
+        # ── 1. DESCOBRIR NOME DO PROJETO (Apenas linhas 1-8 da aba PROJETO) ──
+        # nrows=8 garante que não vamos puxar as linhas do cronograma para a tabela de projetos
         df_projeto_raw = pd.read_excel(
-            arquivo, sheet_name='PROJETO', header=None, usecols="A:B"
+            arquivo, sheet_name='PROJETO', header=None, usecols="A:B", nrows=8
         )
         df_projeto = df_projeto_raw.set_index(0).T
         df_projeto.columns = [limpar_nome_coluna(c) for c in df_projeto.columns]
@@ -60,9 +55,9 @@ def importar_dados():
         nome_do_projeto = str(df_projeto['projeto'].iloc[0]).strip()
         print(f"\n📁 Projeto identificado: '{nome_do_projeto}'")
 
-        # ── 2. LIMPEZA FOCADA ─────────────────────────────────────────────
+        # ── 2. LIMPEZA FOCADA (Incluindo a nova tabela cronograma) ──────────
         print("\n🧹 Limpando dados antigos deste projeto...")
-        tabelas_filhas = ['fases', 'areas', 'pontos_atencao', 'riscos']
+        tabelas_filhas = ['cronograma', 'fases', 'areas', 'pontos_atencao', 'riscos']
         
         for tabela in tabelas_filhas:
             try:
@@ -82,15 +77,31 @@ def importar_dados():
             pass
 
 
-        # ── 3. INSERIR DADOS DA ABA PROJETO ───────────────────
-        colunas_remover = [c for c in df_projeto.columns if c in COLUNAS_EXCLUIR_PROJETOS]
-        if colunas_remover:
-            df_projeto = df_projeto.drop(columns=colunas_remover)
-
+        # ── 3. INSERIR DADOS DA ABA PROJETO (METADADOS) ───────────────────
         df_projeto.to_sql('projetos', engine, if_exists='append', index=False, method='multi')
-        print(f"✅ Aba PROJETO salva.")
+        print(f"✅ Dados mestres do PROJETO salvos.")
 
-        # ── 4. INSERIR ABAS FILHAS (COM RASTREAMENTO CORRIGIDO) ────────────────
+
+        # ── 3.5 EXTRAIR E INSERIR NOVA TABELA CRONOGRAMA (Linhas 9 a 15) ────
+        print(f"⏳ Extraindo cronograma (linhas 9-15)...")
+        # skiprows=8 pula as primeiras 8 linhas de metadados, nrows=7 lê as 7 etapas (A, B, C)
+        df_crono = pd.read_excel(
+            arquivo, sheet_name='PROJETO', skiprows=8, nrows=7, header=None, usecols="A:C"
+        )
+        
+        # Nomeia e limpa as colunas do cronograma
+        df_crono.columns = ['etapa', 'data_inicio', 'data_fim']
+        df_crono['projeto_vinculo'] = nome_do_projeto
+        
+        # Garante a formatação correta de datas para o banco
+        df_crono['data_inicio'] = pd.to_datetime(df_crono['data_inicio'], errors='coerce')
+        df_crono['data_fim'] = pd.to_datetime(df_crono['data_fim'], errors='coerce')
+
+        df_crono.to_sql('cronograma', engine, if_exists='append', index=False, method='multi')
+        print(f"✅ Tabela 'cronograma' salva com sucesso ({len(df_crono)} linhas).")
+
+
+        # ── 4. INSERIR ABAS FILHAS DEMAIS ────────────────────────────────────
         abas = {
             'ATIVIDADE':      'fases',
             'AREAS':          'areas',
@@ -100,26 +111,20 @@ def importar_dados():
 
         for aba, tabela in abas.items():
             try:
-                # nrows=1000 força o Pandas a parar de ler o Excel se houverem linhas fantasmas infinitas
-                print(f"⏳ [1/2] Lendo a aba '{aba}' do Excel...")
-                df = pd.read_excel(arquivo, sheet_name=aba, nrows=1000)
-                
-                # Remove linhas completamente vazias que possam ter vindo do Excel
+                df = pd.read_excel(arquivo, sheet_name=aba)
                 df = df.dropna(how='all')
-            except Exception as e:
-                print(f"⚠️  Erro ao ler aba '{aba}': {e} — pulando.")
+            except Exception:
+                print(f"⚠️  Aba '{aba}' não encontrada — pulando.")
                 continue
 
             if df.empty:
-                print(f"ℹ️  Aba '{aba}' está vazia no arquivo.")
                 continue
 
             df.columns = [limpar_nome_coluna(c) for c in df.columns]
             df['projeto_vinculo'] = nome_do_projeto
 
-            print(f"🚀 [2/2] Gravando {len(df)} linhas na tabela '{tabela}' do Supabase...")
             df.to_sql(tabela, engine, if_exists='append', index=False, method='multi')
-            print(f"✅ Aba {aba} → salva com sucesso!\n")
+            print(f"✅ Aba {aba} → tabela '{tabela}' ({len(df)} linhas)")
 
         print(f"\n🚀 Importação de '{nome_do_projeto}' finalizada com sucesso!\n")
 
