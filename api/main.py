@@ -81,16 +81,13 @@ COLUNAS_RISCOS = {
     'probabilidade':     'probabilidade',
     'impacto':           'impacto',
 }
-# ─────────────────────────────────────────────────────────────────
-# ADICIONAR ao dicionário ABAS_MAPEAMENTO (junto com as outras abas)
-# ─────────────────────────────────────────────────────────────────
 
 COLUNAS_OBJETIVOS = {
-    'objetivo':  'objetivo',
+    'objetivo':        'objetivo',
     'descricao_curta': 'descricao_curta',
-    'descricao': 'descricao',
-    'status':    'status',
-    'icone':     'icone',
+    'descricao':       'descricao',
+    'status':          'status',
+    'icone':           'icone',
 }
 
 ABAS_MAPEAMENTO = {
@@ -101,14 +98,8 @@ ABAS_MAPEAMENTO = {
     'OBJETIVOS':      ('objetivos',       COLUNAS_OBJETIVOS),   
 }
 
- #─────────────────────────────────────────────────────────────────
-
 # ── Helpers ───────────────────────────────────────────────────────
 def limpar_nome_coluna(nome) -> str | None:
-    """
-    Normaliza um nome de coluna para snake_case sem acentos.
-    Retorna None se o valor for vazio ou nulo (coluna sem cabeçalho).
-    """
     if nome is None:
         return None
     nome = str(nome).strip()
@@ -136,24 +127,16 @@ def normalizar_dtypes(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def selecionar_e_renomear(df: pd.DataFrame, mapeamento: dict, sheet: str = '') -> pd.DataFrame:
-    """
-    Seleciona e renomeia colunas conforme o mapeamento.
-    Loga um aviso para colunas esperadas que não foram encontradas.
-    """
     presentes = {k: v for k, v in mapeamento.items() if k in df.columns}
     faltando = [k for k in mapeamento if k not in df.columns]
 
     if faltando:
-        print(f"⚠️  [{sheet}] Colunas do mapeamento não encontradas no Excel (serão ignoradas): {faltando}")
+        print(f"⚠️  [{sheet}] Colunas não encontradas no Excel (serão ignoradas): {faltando}")
 
     return df[list(presentes.keys())].rename(columns=presentes)
 
 
 def remover_colunas_sem_cabecalho(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Remove colunas cujo nome é None após a limpeza (cabeçalhos vazios/nulos no Excel).
-    Evita que colunas extras vazias do Excel poluam o DataFrame silenciosamente.
-    """
     colunas_validas = [c for c in df.columns if c is not None]
     removidas = len(df.columns) - len(colunas_validas)
     if removidas:
@@ -190,8 +173,8 @@ async def importar_dados(
 
         with engine.begin() as conn:
 
-            # 1. NOME DO PROJETO
-            df_projeto_raw = ler_aba(file_buffer, 'PROJETO', header=None, usecols="A:B")
+            # 1. NOME DO PROJETO E METADADOS (Limitado a 8 linhas)
+            df_projeto_raw = ler_aba(file_buffer, 'PROJETO', header=None, usecols="A:B", nrows=8)
             if df_projeto_raw is None:
                 raise HTTPException(status_code=400, detail="Aba 'PROJETO' não encontrada ou vazia.")
 
@@ -205,8 +188,8 @@ async def importar_dados(
 
             nome_do_projeto = str(df_projeto['projeto'].iloc[0]).strip()
 
-            # 2. LIMPEZA
-            for tabela in ['fases', 'areas', 'pontos_atencao', 'riscos', 'objetivos']:
+            # 2. LIMPEZA (Incluindo tabela cronograma)
+            for tabela in ['cronograma', 'fases', 'areas', 'pontos_atencao', 'riscos', 'objetivos']:
                 if tabela in tabelas_existentes:
                     conn.execute(
                         text(f"DELETE FROM {tabela} WHERE projeto_vinculo = :projeto AND owner_id = :owner"),
@@ -223,7 +206,19 @@ async def importar_dados(
             df_projeto = selecionar_e_renomear(df_projeto, COLUNAS_PROJETOS, sheet='PROJETO')
             df_projeto = normalizar_dtypes(df_projeto)
             df_projeto['owner_id'] = owner_id
-            df_projeto.to_sql('projetos', conn, if_exists='append', index=False, dtype={'owner_id': UUID})
+            df_projeto.to_sql('projetos', conn, if_exists='append', index=False, dtype={'owner_id': UUID}, method='multi')
+
+            # 3.5. EXTRAIR E INSERIR NOVA TABELA CRONOGRAMA
+            df_crono = ler_aba(file_buffer, 'PROJETO', skiprows=8, nrows=7, header=None, usecols="A:C")
+            if df_crono is not None and not df_crono.empty:
+                df_crono.columns = ['etapa', 'data_inicio', 'data_fim']
+                df_crono['projeto_vinculo'] = nome_do_projeto
+                df_crono['owner_id'] = owner_id
+                
+                df_crono['data_inicio'] = pd.to_datetime(df_crono['data_inicio'], errors='coerce')
+                df_crono['data_fim'] = pd.to_datetime(df_crono['data_fim'], errors='coerce')
+                
+                df_crono.to_sql('cronograma', conn, if_exists='append', index=False, dtype={'owner_id': UUID}, method='multi')
 
             # 4. INSERIR ABAS FILHAS
             for sheet, (tabela, mapeamento) in ABAS_MAPEAMENTO.items():
@@ -232,7 +227,6 @@ async def importar_dados(
                     print(f"⚠️  Aba '{sheet}' não encontrada ou vazia — ignorada.")
                     continue
 
-                # Limpa nomes de colunas e remove as que não têm cabeçalho
                 df_aba.columns = [limpar_nome_coluna(c) for c in df_aba.columns]
                 df_aba = remover_colunas_sem_cabecalho(df_aba)
 
@@ -240,7 +234,7 @@ async def importar_dados(
                 df_aba = normalizar_dtypes(df_aba)
                 df_aba['projeto_vinculo'] = nome_do_projeto
                 df_aba['owner_id'] = owner_id
-                df_aba.to_sql(tabela, conn, if_exists='append', index=False, dtype={'owner_id': UUID})
+                df_aba.to_sql(tabela, conn, if_exists='append', index=False, dtype={'owner_id': UUID}, method='multi')
 
         return {
             "status": "sucesso",
@@ -258,7 +252,6 @@ async def importar_dados(
             file_buffer.close()
         del contents, file_buffer
         gc.collect()
-
 
 # ── Handler Vercel ────────────────────────────────────────────────
 handler = Mangum(app)
